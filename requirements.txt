@@ -1,0 +1,4 @@
+Flask==2.3.3
+dkimpy==1.0.5
+pyspf==2.0.15
+dnspython==2.3.0

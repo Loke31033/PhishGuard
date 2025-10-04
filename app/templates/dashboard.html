@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PhishGuard Super SOC Dashboard (Offline + Live Verification)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body { font-family: Arial,sans-serif; background:#f4f4f4; margin:0; padding:20px; }
+h1 { text-align:center; }
+form { text-align:center; margin:20px 0; }
+input[type="file"], input[type="text"], select, button { margin-right:10px; padding:5px; }
+table { width:100%; border-collapse:collapse; margin-top:20px; background:#fff; }
+th, td { padding:10px; border:1px solid #ddd; text-align:left; vertical-align:top; }
+th { background:#333; color:#fff; }
+tr:nth-child(even) { background:#f9f9f9; }
+tr.risk-safe { background:#c8e6c9; }
+tr.risk-suspicious { background:#ffe0b2; }
+tr.risk-high { background:#ffcdd2; }
+.risk-safe, .url-safe, .attachment-safe { color:#28a745; font-weight:bold; }
+.risk-suspicious, .url-suspicious, .attachment-suspicious { color:#ff9800; font-weight:bold; }
+.risk-high, .url-risky, .attachment-risky { color:#dc3545; font-weight:bold; }
+.btn-view, .btn-download, .btn-copy { display:inline-block; padding:6px 12px; color:#fff; text-decoration:none; border-radius:4px; font-size:14px; cursor:pointer; }
+.btn-view { background:#007BFF; }
+.btn-download { background:#28a745; margin-left:5px; }
+.btn-copy { background:#6c757d; margin-left:5px; }
+.btn-global-export { background:#ff6600; margin-left:10px; }
+.modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; }
+.modal-content { background:#fff; margin:5% auto; padding:20px; width:85%; max-height:80%; overflow-y:auto; border-radius:8px; }
+.close { float:right; cursor:pointer; font-size:20px; font-weight:bold; }
+.modal-header { margin-bottom:10px; font-weight:bold; font-size:16px; display:flex; justify-content:space-between; align-items:center;}
+.modal-body { max-height:480px; overflow-y:auto; white-space:pre-wrap; word-wrap:break-word; }
+#liveDashboard { display:flex; justify-content:center; gap:20px; margin-bottom:20px; flex-wrap:wrap; }
+#liveDashboard div { padding:10px 20px; border-radius:8px; border:1px solid #ddd; text-align:center; background:#fff; min-width:120px; }
+.blink { animation: blink-animation 1s steps(5, start) 3; }
+@keyframes blink-animation { to { visibility:hidden; } }
+#chartContainer, #barChartContainer { width:400px; margin:0 auto 20px auto; }
+.small { font-size:12px; color:#666; }
+.highlight-keyword { background:yellow; font-weight:bold; }
+td.snippet { max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+</style>
+</head>
+<body>
+<h1>PhishGuard Super SOC Dashboard (Offline + Live Verification)</h1>
+
+<div id="liveDashboard">
+  <div>Total Emails<br><span id="totalEmails" style="font-weight:bold;font-size:18px;">0</span></div>
+  <div style="background:#c8e6c9;">Safe Emails<br><span id="safeCount" style="font-weight:bold;font-size:18px;color:#28a745;">0</span></div>
+  <div style="background:#ffe0b2;">Suspicious Emails<br><span id="suspiciousCount" style="font-weight:bold;font-size:18px;color:#ff9800;">0</span></div>
+  <div style="background:#ffcdd2;">High Risk Emails<br><span id="highCount" style="font-weight:bold;font-size:18px;color:#dc3545;">0</span></div>
+</div>
+
+<div id="chartContainer"><canvas id="riskChart"></canvas></div>
+<div id="barChartContainer"><canvas id="riskBarChart"></canvas></div>
+
+<form id="uploadForm" action="#" method="post" enctype="multipart/form-data" onsubmit="return false;">
+  <input id="emlFileInput" type="file" name="email" accept=".eml" multiple required>
+  <button id="uploadBtn" type="button">Upload .eml and Analyze</button>
+  <button id="exportAllCSV" class="btn-global-export">Export All CSV</button>
+  <span class="small">You can upload multiple .eml files at once.</span>
+</form>
+
+<div style="text-align:center; margin-bottom:10px;">
+  <input type="text" id="searchInput" placeholder="Search by Sender or Subject" aria-label="Search emails">
+  <select id="riskFilter" aria-label="Filter by Risk Level">
+    <option value="">Filter by Risk Level</option>
+    <option value="Safe">Safe</option>
+    <option value="Suspicious">Suspicious</option>
+    <option value="High">High</option>
+  </select>
+</div>
+
+<table id="emailsTable" aria-live="polite">
+  <thead>
+    <tr>
+      <th>#</th><th>From</th><th>To</th><th>Subject</th><th>Date</th><th>Snippet</th><th>URLs</th><th>Attachments</th><th>SPF/DKIM/DMARC</th><th>Risk Level</th><th>Score</th><th>Actions</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<div id="modal" class="modal" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="modal-content">
+    <span class="close" aria-label="Close">&times;</span>
+    <div class="modal-header">
+      <span id="modalTitle"></span>
+      <div>
+        <button class="btn-copy" id="copyAllModal">Copy All</button>
+        <button class="btn-download" id="exportCSVModal">Export CSV</button>
+      </div>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+// =================== Utilities ===================
+let emailsData = [];
+
+function parseHeaders(raw) {
+    const headerEndIdx = raw.search(/\r\n\r\n|\n\n/);
+    const headerText = headerEndIdx >= 0 ? raw.slice(0, headerEndIdx) : raw;
+    const lines = headerText.replace(/\r\n[ \t]+/g,' ').split(/\r\n|\n/);
+    const headers = {};
+    lines.forEach(line => {
+        const m = line.match(/^([^:]+):\s*(.*)$/);
+        if (m) {
+            const k = m[1].trim();
+            const v = m[2].trim();
+            headers[k] ? headers[k]+='\n'+v : headers[k]=v;
+        }
+    });
+    return headers;
+}
+
+function parseAddress(addr){ const m=addr&&addr.match(/(.*)<(.+@.+)>/); return m?m[2].trim():(addr||'').trim(); }
+function parseMultipartForPlain(raw){ const m=raw.match(/Content-Type:[^\r\n]*multipart\/[^\r\n]*boundary=("[^"]+"|[^;\r\n]+)/i); if(!m){ const sep=raw.search(/\r\n\r\n|\n\n/); return sep>=0?raw.slice(sep+(raw.includes('\r\n\r\n')?4:2)):raw; } let boundary=m[1].trim(); if(boundary.startsWith('"')&&boundary.endsWith('"')) boundary=boundary.slice(1,-1); const parts=raw.split('--'+boundary); for(const p of parts){ if(/Content-Type:\s*text\/plain/i.test(p)){ const idx=p.search(/\r\n\r\n|\n\n/); return idx>=0?p.slice(idx+(p.includes('\r\n\r\n')?4:2)).trim():p.trim(); } } const sep=raw.search(/\r\n\r\n|\n\n/); return sep>=0?raw.slice(sep+(raw.includes('\r\n\r\n')?4:2)).trim():raw; }
+
+function extractUrlsFromText(text){ if(!text)return[]; const urlPattern=/https?:\/\/[^\s"'<>]+/gi; return[...new Set(text.match(urlPattern)||[])]; }
+function extractAttachmentFilenames(raw){ const names=[]; const re1=/Content-Disposition:[^\r\n]*filename\*?=([^;\r\n]+)/ig; let m; while((m=re1.exec(raw))!==null){ let v=m[1].trim().replace(/^UTF-8''/i,'').replace(/^"(.+)"$/,'$1').replace(/;$/,''); v=decodeURIComponent(v); names.push(v); } const re2=/Content-Type:[^\r\n]*name=([^;\r\n]+)/ig; while((m=re2.exec(raw))!==null){ let v=m[1].trim().replace(/^"(.+)"$/,'$1'); names.push(v); } return[...new Set(names)]; }
+
+function hostnameFromUrl(url){ try{ return (new URL(url)).hostname; }catch(e){return '';} }
+function isIpHost(host){ if(!host)return false; return /^\d{1,3}(\.\d{1,3}){3}$/.test(host)||/^\[?\d{0,4}(:[0-9a-fA-F]{0,4}){2,7}\]?$/.test(host); }
+function isShortenedDomain(host){ const s=['bit.ly','tinyurl.com','goo.gl','t.co','tiny.cc','ow.ly','is.gd','buff.ly']; return s.some(x=>host.toLowerCase().endsWith(x)); }
+async function sha256(str){ const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str)); return Array.from(new Uint8Array(buf)).map(x=>x.toString(16).padStart(2,'0')).join(''); }
+
+// =================== Risk Analysis ===================
+function analyzeUrlRisk(urls, fromHeader){
+  const results=[]; const fromDomain=(parseAddress(fromHeader)||'').split('@').pop()||'';
+  urls.forEach(url=>{
+    const host=hostnameFromUrl(url).toLowerCase(); let risk='Safe';
+    if(isShortenedDomain(host)||isIpHost(host)) risk='Suspicious';
+    else if(fromDomain&&host&&!host.includes(fromDomain)) risk='Suspicious';
+    results.push({url,risk});
+  });
+  return results;
+}
+
+function analyzeAttachmentRisk(attList){
+  const risky=['.exe','.js','.docm','.bat','.scr','.vbs','.ps1','.msi','.jar'];
+  return attList.map(fn=>{ const low=(fn||'').toLowerCase(); return {filename:fn,risk:risky.some(ext=>low.endsWith(ext))?'Suspicious':'Safe'}; });
+}
+
+function computeRiskScore(spfDkimDmarc,urlAnalysis,attachmentAnalysis){
+  let score=0;
+  if(spfDkimDmarc.spf==='fail') score+=30;
+  if(spfDkimDmarc.dkim==='fail') score+=30;
+  if(spfDkimDmarc.dmarc==='fail') score+=20;
+  if(urlAnalysis.some(u=>u.risk==='Suspicious')) score+=10;
+  if(attachmentAnalysis.some(a=>a.risk==='Suspicious')) score+=10;
+  return score>100?100:score;
+}
+
+function classifyRiskFromScore(score){
+  if(score>=50) return'High';
+  if(score>=20) return'Suspicious';
+  return'Safe';
+}
+
+// =================== Table Rendering ===================
+function addEmailToTable(idx,email){
+  const tbody=document.querySelector('#emailsTable tbody');
+  const tr=document.createElement('tr');
+  tr.className='risk-'+email.risk_level.toLowerCase();
+  const urls=email.url_analysis.map(u=>`<span class="url-${u.risk.toLowerCase()}">${u.url}</span>`).join('<br>');
+  const atts=email.attachment_analysis.map(a=>`<span class="attachment-${a.risk.toLowerCase()}">${a.filename}</span>`).join('<br>');
+  const spf=email.spfDkimDmarc.spf||'none';
+  const dkim=email.spfDkimDmarc.dkim||'none';
+  const dmarc=email.spfDkimDmarc.dmarc||'none';
+  const actions=`<button class="btn-view" onclick="showModal(${idx})">View</button>`;
+  tr.innerHTML=`<td>${idx+1}</td><td>${email.headers.From||''}</td><td>${email.headers.To||''}</td><td>${email.headers.Subject||''}</td><td>${email.headers.Date||''}</td><td class="snippet">${email.body.slice(0,100)}</td><td>${urls}</td><td>${atts}</td><td>SPF:${spf}<br>DKIM:${dkim}<br>DMARC:${dmarc}</td><td>${email.risk_level}</td><td>${email.risk_score}</td><td>${actions}</td>`;
+  tbody.appendChild(tr);
+}
+
+// =================== Modal ===================
+const modal=document.getElementById('modal');
+document.querySelector('.close').onclick=()=>modal.style.display='none';
+function showModal(idx){
+  const e=emailsData[idx];
+  document.getElementById('modalTitle').textContent=`Email #${idx+1} Details`;
+  document.getElementById('modalBody').textContent=
+    `From: ${e.headers.From}\nTo: ${e.headers.To}\nSubject: ${e.headers.Subject}\nDate: ${e.headers.Date}\n\nBody:\n${e.body}\n\nURLs:\n${e.url_analysis.map(u=>u.url+' ('+u.risk+')').join('\n')}\n\nAttachments:\n${e.attachment_analysis.map(a=>a.filename+' ('+a.risk+')').join('\n')}\n\nSPF/DKIM/DMARC:\nSPF: ${e.spfDkimDmarc.spf}\nDKIM: ${e.spfDkimDmarc.dkim}\nDMARC: ${e.spfDkimDmarc.dmarc}\n\nRisk Level: ${e.risk_level}\nRisk Score: ${e.risk_score}`;
+  modal.style.display='block';
+}
+
+// =================== Charts & Dashboard ===================
+function updateLiveDashboard(){
+  const total=emailsData.length;
+  const safe=emailsData.filter(e=>e.risk_level==='Safe').length;
+  const suspicious=emailsData.filter(e=>e.risk_level==='Suspicious').length;
+  const high=emailsData.filter(e=>e.risk_level==='High').length;
+  document.getElementById('totalEmails').textContent=total;
+  document.getElementById('safeCount').textContent=safe;
+  document.getElementById('suspiciousCount').textContent=suspicious;
+  document.getElementById('highCount').textContent=high;
+}
+let riskChart, riskBarChart;
+function renderCharts(){
+  const labels=['Safe','Suspicious','High'];
+  const counts=[emailsData.filter(e=>e.risk_level==='Safe').length,emailsData.filter(e=>e.risk_level==='Suspicious').length,emailsData.filter(e=>e.risk_level==='High').length];
+  if(riskChart) riskChart.destroy();
+  if(riskBarChart) riskBarChart.destroy();
+  const ctx=document.getElementById('riskChart').getContext('2d');
+  riskChart=new Chart(ctx,{type:'pie',data:{labels, datasets:[{data:counts, backgroundColor:['#28a745','#ff9800','#dc3545']}]}, options:{responsive:true}});
+  const ctx2=document.getElementById('riskBarChart').getContext('2d');
+  riskBarChart=new Chart(ctx2,{type:'bar',data:{labels, datasets:[{label:'Emails', data:counts, backgroundColor:['#28a745','#ff9800','#dc3545']}]}, options:{responsive:true}});
+}
+
+// =================== File Upload (Backend Integrated) ===================
+document.getElementById('uploadBtn').onclick=async()=>{
+  const files=document.getElementById('emlFileInput').files;
+  if(!files||files.length===0){ alert('Select .eml files'); return; }
+  emailsData=[]; document.querySelector('#emailsTable tbody').innerHTML='';
+  for(let i=0;i<files.length;i++){
+    const formData=new FormData();
+    formData.append('email',files[i]);
+    try{
+      const resp=await fetch('/upload',{method:'POST',body:formData});
+      if(!resp.ok){ const err=await resp.json(); alert('Upload failed: '+(err.error||resp.statusText)); continue; }
+      const emailObj=await resp.json();
+      const urls=emailObj.urls_detected||[];
+      const attachments=emailObj.attachments||[];
+      const spfDkimDmarc=emailObj.spf_dkim_dmarc||{};
+      const risk_level=emailObj.risk_level||'Safe';
+      const score=emailObj.risk_score||0;
+      const emailData={
+        headers: emailObj.headers||{},
+        body: emailObj.body_text||'',
+        url_analysis: urls,
+        attachment_analysis: attachments,
+        spfDkimDmarc,
+        risk_score: score,
+        risk_level,
+        keywords: emailObj.suspicious_keywords||[]
+      };
+      emailsData.push(emailData);
+      addEmailToTable(i,emailData);
+    }catch(err){ console.error(err); alert('Error uploading file: '+err.message); }
+  }
+  updateLiveDashboard();
+  renderCharts();
+};
+
+// =================== Search & Filter ===================
+document.getElementById('searchInput').oninput=document.getElementById('riskFilter').onchange=function(){
+  const query=document.getElementById('searchInput').value.toLowerCase();
+  const riskFilter=document.getElementById('riskFilter').value;
+  const tbody=document.querySelector('#emailsTable tbody');
+  tbody.innerHTML='';
+  emailsData.forEach((e,i)=>{
+    const from=parseAddress(e.headers.From).toLowerCase();
+    const subject=(e.headers.Subject||'').toLowerCase();
+    if((from.includes(query)||subject.includes(query))&&(riskFilter===''||e.risk_level===riskFilter)){
+      addEmailToTable(i,e);
+    }
+  });
+};
+
+// =================== Export All Emails CSV ===================
+function downloadCSV(filename, rows){
+  const csvContent="data:text/csv;charset=utf-8," + rows.map(e=>e.map(a=>`"${a}"`).join(",")).join("\n");
+  const encodedUri=encodeURI(csvContent);
+  const link=document.createElement("a"); link.setAttribute("href",encodedUri); link.setAttribute("download", filename); document.body.appendChild(link); link.click(); document.body.removeChild(link);
+}
+
+document.getElementById('exportAllCSV').onclick=function(){
+  if(emailsData.length===0){ alert('No emails to export'); return; }
+  const rows=[["From","To","Subject","Date","Body","URLs","Attachments","SPF","DKIM","DMARC","Risk Level","Score"]];
+  emailsData.forEach(e=>{
+    rows.push([
+      e.headers.From||'', e.headers.To||'', e.headers.Subject||'', e.headers.Date||'', e.body.replace(/\n/g,' '),
+      e.url_analysis.map(u=>u.url+' ('+u.risk+')').join("; "),
+      e.attachment_analysis.map(a=>a.filename+' ('+a.risk+')').join("; "),
+      e.spfDkimDmarc.spf||'none', e.spfDkimDmarc.dkim||'none', e.spfDkimDmarc.dmarc||'none',
+      e.risk_level, e.risk_score
+    ]);
+  });
+  downloadCSV("all_emails.csv", rows);
+};
+
+// =================== Modal Copy & CSV ===================
+document.getElementById('copyAllModal').onclick=function(){
+  const text=document.getElementById('modalBody').textContent;
+  navigator.clipboard.writeText(text).then(()=>alert('Copied to clipboard'));
+};
+document.getElementById('exportCSVModal').onclick=function(){
+  const text=document.getElementById('modalBody').textContent.replace(/\n/gi,",");
+  downloadCSV('email_modal.csv', [text.split(',')]);
+};
+</script>
+</body>
+</html>

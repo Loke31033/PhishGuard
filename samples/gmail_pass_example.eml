@@ -1,0 +1,36 @@
+Delivered-To: user@example.com
+Received: by 2002:a17:902:9303:b0:3e:abcd:1234 with SMTP id h3csp167218ejz;
+        Mon, 30 Sep 2024 10:15:02 -0700 (PDT)
+X-Received: by 2002:a0c:e385:0:b0:59f:9e22:1234 with SMTP id r5mr8794549qvh.37.1727718902000;
+        Mon, 30 Sep 2024 10:15:02 -0700 (PDT)
+Return-Path: <someone@gmail.com>
+Received-SPF: pass (google.com: domain of someone@gmail.com designates 209.85.220.41 as permitted sender) client-ip=209.85.220.41;
+Authentication-Results: mx.google.com;
+       dkim=pass header.i=@gmail.com header.s=20230601 header.b=fDkL3aQ7;
+       spf=pass (google.com: domain of someone@gmail.com designates 209.85.220.41 as permitted sender) smtp.mailfrom=someone@gmail.com;
+       dmarc=pass (p=NONE sp=NONE dis=NONE) header.from=gmail.com
+Received: from mail-io1-f41.google.com (mail-io1-f41.google.com. [209.85.220.41])
+        by mx.google.com with ESMTPS id v12si4319848qke.122.2024.09.30.10.15.01
+        for <user@example.com>
+        (version=TLS1_3 cipher=TLS_AES_256_GCM_SHA384 bits=256/256);
+        Mon, 30 Sep 2024 10:15:01 -0700 (PDT)
+Received: by mail-io1-f41.google.com with SMTP id c3so4525668qkg.1
+        for <user@example.com>; Mon, 30 Sep 2024 10:15:01 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=gmail.com; s=20230601;
+        h=mime-version:from:date:message-id:subject:to;
+        bh=ABCD1234567890XYZ=;
+        b=fDkL3aQ7...
+MIME-Version: 1.0
+From: Someone <someone@gmail.com>
+Date: Mon, 30 Sep 2024 10:15:01 -0700
+Message-ID: <CAFkjwkj-1234abcd@mail.gmail.com>
+Subject: Test Email with SPF and DKIM Pass
+To: user@example.com
+Content-Type: text/plain; charset="UTF-8"
+
+Hello,
+
+This is a test email to check SPF and DKIM validation.
+
+Regards,  
+Someone
