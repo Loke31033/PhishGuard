@@ -19,10 +19,56 @@ tr.risk-high { background:#ffcdd2; }
 #liveDashboard { display:flex; justify-content:center; gap:20px; margin-bottom:20px; flex-wrap:wrap; }
 #liveDashboard div { padding:10px 20px; border-radius:8px; border:1px solid #ddd; text-align:center; background:#fff; min-width:120px; }
 #chartContainer, #barChartContainer { width:400px; margin:0 auto 20px auto; }
+
+/* NEW STYLES FOR ADDED FEATURES */
+.controls-row { text-align:center; margin:15px 0; }
+.controls-row button { margin:5px; padding:8px 15px; background:#3498db; color:white; border:none; border-radius:4px; cursor:pointer; }
+.controls-row button:hover { background:#2980b9; }
+#exportBtn { background:#27ae60; }
+#exportBtn:hover { background:#219653; }
+#clearBtn { background:#e74c3c; }
+#clearBtn:hover { background:#c0392b; }
+#toggleChartsBtn { background:#9b59b6; }
+#toggleChartsBtn:hover { background:#8e44ad; }
+#darkModeBtn { background:#2c3e50; }
+#darkModeBtn:hover { background:#34495e; }
+.dark-mode { background:#1a1a1a; color:#fff; }
+.dark-mode table { background:#2d2d2d; color:#fff; }
+.dark-mode th { background:#444; }
+.dark-mode #liveDashboard div { background:#333; border-color:#555; }
+.dark-mode input, .dark-mode select { background:#333; color:#fff; border:1px solid #555; }
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:15px; margin:20px 0; }
+.stat-card { background:white; padding:15px; border-radius:8px; text-align:center; box-shadow:0 2px 5px rgba(0,0,0,0.1); }
+.dark-mode .stat-card { background:#333; }
+.email-preview { max-height:0; overflow:hidden; transition:max-height 0.3s ease; background:#f9f9f9; }
+.email-preview.expanded { max-height:200px; padding:10px; border:1px solid #ddd; margin-top:5px; }
+.dark-mode .email-preview { background:#2a2a2a; }
+footer { text-align:center; margin-top:30px; padding:20px; color:#666; border-top:1px solid #ddd; }
+.dark-mode footer { border-color:#444; color:#999; }
 </style>
 </head>
 <body>
 <h1>PhishGuard SOC Dashboard</h1>
+
+<!-- NEW: Quick Stats Grid -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <h3>🕒 Last Scan</h3>
+    <p id="lastScanTime">Never</p>
+  </div>
+  <div class="stat-card">
+    <h3>📊 Avg Risk Score</h3>
+    <p id="avgRiskScore">0</p>
+  </div>
+  <div class="stat-card">
+    <h3>🔍 Domains Analyzed</h3>
+    <p id="domainsAnalyzed">0</p>
+  </div>
+  <div class="stat-card">
+    <h3>⏱️ Processing Time</h3>
+    <p id="processingTime">0ms</p>
+  </div>
+</div>
 
 <div id="liveDashboard">
   <div>Total Emails<br><span id="totalEmails">0</span></div>
@@ -33,6 +79,15 @@ tr.risk-high { background:#ffcdd2; }
 
 <div id="chartContainer"><canvas id="riskChart"></canvas></div>
 <div id="barChartContainer"><canvas id="riskBarChart"></canvas></div>
+
+<!-- NEW: Control Buttons Row -->
+<div class="controls-row">
+  <button id="toggleChartsBtn" onclick="toggleCharts()">📊 Toggle Charts</button>
+  <button id="exportBtn" onclick="exportToCSV()">📥 Export CSV</button>
+  <button id="clearBtn" onclick="clearAllData()">🗑️ Clear All</button>
+  <button id="darkModeBtn" onclick="toggleDarkMode()">🌙 Dark Mode</button>
+  <button onclick="showSampleData()">🧪 Load Sample Data</button>
+</div>
 
 <form id="uploadForm">
   <input type="file" id="emlFiles" accept=".eml" multiple>
@@ -52,14 +107,21 @@ tr.risk-high { background:#ffcdd2; }
 <table id="emailsTable" aria-live="polite">
   <thead>
     <tr>
-      <th>#</th><th>From</th><th>Subject</th><th>SPF</th><th>DKIM</th><th>DMARC</th><th>Risk Level</th>
+      <th>#</th><th>From</th><th>Subject</th><th>SPF</th><th>DKIM</th><th>DMARC</th><th>Risk Level</th><th>Actions</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
+<!-- NEW: Footer -->
+<footer>
+  <p>PhishGuard SOC Dashboard v2.0 | Real-time Email Security Analysis | Demo Ready</p>
+</footer>
+
 <script>
 let emailsData = [];
+let darkMode = false;
+let chartsVisible = true;
 
 function classifyRisk(spf, dkim, dmarc){
   let score = 0;
@@ -77,10 +139,14 @@ function addEmailToTable(idx,email){
     <td>${idx+1}</td>
     <td>${email.from}</td>
     <td>${email.subject||''}</td>
-    <td>${email.spf}</td>
-    <td>${email.dkim}</td>
-    <td>${email.dmarc}</td>
-    <td>${email.risk_level}</td>`;
+    <td><span class="auth-badge ${email.spf==='pass'?'pass':'fail'}">${email.spf}</span></td>
+    <td><span class="auth-badge ${email.dkim==='pass'?'pass':'fail'}">${email.dkim}</span></td>
+    <td><span class="auth-badge ${email.dmarc==='pass'?'pass':'fail'}">${email.dmarc}</span></td>
+    <td><strong>${email.risk_level}</strong></td>
+    <td>
+      <button onclick="viewEmailDetails(${idx})" style="font-size:12px; padding:3px 8px;">👁️ View</button>
+      <button onclick="deleteEmail(${idx})" style="font-size:12px; padding:3px 8px; background:#e74c3c;">🗑️</button>
+    </td>`;
   tbody.appendChild(tr);
 }
 
@@ -89,14 +155,37 @@ function updateDashboard(){
   const safe = emailsData.filter(e=>e.risk_level==='Safe').length;
   const suspicious = emailsData.filter(e=>e.risk_level==='Suspicious').length;
   const high = emailsData.filter(e=>e.risk_level==='High').length;
+  
   document.getElementById('totalEmails').textContent = total;
   document.getElementById('safeCount').textContent = safe;
   document.getElementById('suspiciousCount').textContent = suspicious;
   document.getElementById('highCount').textContent = high;
+  
+  // NEW: Update stats grid
+  updateStatsGrid();
+}
+
+function updateStatsGrid() {
+  // Last scan time
+  document.getElementById('lastScanTime').textContent = new Date().toLocaleTimeString();
+  
+  // Average risk score
+  const avgScore = emailsData.length > 0 ? 
+    emailsData.reduce((sum, email) => {
+      const score = email.risk_level === 'High' ? 75 : email.risk_level === 'Suspicious' ? 40 : 10;
+      return sum + score;
+    }, 0) / emailsData.length : 0;
+  document.getElementById('avgRiskScore').textContent = Math.round(avgScore);
+  
+  // Unique domains analyzed
+  const domains = new Set(emailsData.map(email => email.from.split('@')[1]).filter(Boolean));
+  document.getElementById('domainsAnalyzed').textContent = domains.size;
 }
 
 let riskChart, riskBarChart;
 function renderCharts(){
+  if (!chartsVisible) return;
+  
   const labels = ['Safe','Suspicious','High'];
   const counts = [emailsData.filter(e=>e.risk_level==='Safe').length,
                   emailsData.filter(e=>e.risk_level==='Suspicious').length,
@@ -105,10 +194,68 @@ function renderCharts(){
   if(riskBarChart) riskBarChart.destroy();
 
   const ctx = document.getElementById('riskChart').getContext('2d');
-  riskChart = new Chart(ctx, {type:'pie', data:{labels, datasets:[{data:counts, backgroundColor:['#28a745','#ff9800','#dc3545']}]}});
+  riskChart = new Chart(ctx, {
+    type:'pie', 
+    data:{
+      labels, 
+      datasets:[{
+        data:counts, 
+        backgroundColor:['#28a745','#ff9800','#dc3545'],
+        borderWidth: 2,
+        borderColor: darkMode ? '#333' : '#fff'
+      }]
+    },
+    options: {
+      plugins: {
+        legend: {
+          labels: {
+            color: darkMode ? '#fff' : '#333'
+          }
+        }
+      }
+    }
+  });
 
   const ctx2 = document.getElementById('riskBarChart').getContext('2d');
-  riskBarChart = new Chart(ctx2, {type:'bar', data:{labels, datasets:[{label:'Emails', data:counts, backgroundColor:['#28a745','#ff9800','#dc3545']}]}, options:{responsive:true}});
+  riskBarChart = new Chart(ctx2, {
+    type:'bar', 
+    data:{
+      labels, 
+      datasets:[{
+        label:'Emails', 
+        data:counts, 
+        backgroundColor:['#28a745','#ff9800','#dc3545']
+      }]
+    }, 
+    options:{
+      responsive:true,
+      plugins: {
+        legend: {
+          labels: {
+            color: darkMode ? '#fff' : '#333'
+          }
+        }
+      },
+      scales: {
+        y: {
+          ticks: {
+            color: darkMode ? '#fff' : '#333'
+          },
+          grid: {
+            color: darkMode ? '#444' : '#ddd'
+          }
+        },
+        x: {
+          ticks: {
+            color: darkMode ? '#fff' : '#333'
+          },
+          grid: {
+            color: darkMode ? '#444' : '#ddd'
+          }
+        }
+      }
+    }
+  });
 }
 
 async function uploadEmails(){
@@ -116,6 +263,8 @@ async function uploadEmails(){
   if(!files.length){ alert('Select files'); return; }
   emailsData=[]; document.querySelector('#emailsTable tbody').innerHTML='';
 
+  const startTime = performance.now();
+  
   for(let i=0;i<files.length;i++){
     const formData = new FormData();
     formData.append('email', files[i]);
@@ -136,7 +285,9 @@ async function uploadEmails(){
         spf: spf,
         dkim: dkim,
         dmarc: dmarc,
-        risk_level
+        risk_level,
+        body: data.body_text || '',
+        urls: data.urls_detected || []
       };
       emailsData.push(emailObj);
       addEmailToTable(i,emailObj);
@@ -146,8 +297,130 @@ async function uploadEmails(){
     }
   }
 
+  const endTime = performance.now();
+  document.getElementById('processingTime').textContent = Math.round(endTime - startTime) + 'ms';
+  
   updateDashboard();
   renderCharts();
+}
+
+// =================== NEW FEATURES ===================
+
+function toggleDarkMode() {
+  darkMode = !darkMode;
+  document.body.classList.toggle('dark-mode', darkMode);
+  document.getElementById('darkModeBtn').textContent = darkMode ? '☀️ Light Mode' : '🌙 Dark Mode';
+  if (riskChart || riskBarChart) {
+    renderCharts(); // Re-render charts with new colors
+  }
+}
+
+function toggleCharts() {
+  chartsVisible = !chartsVisible;
+  const charts = document.getElementById('chartContainer');
+  const barCharts = document.getElementById('barChartContainer');
+  
+  if (chartsVisible) {
+    charts.style.display = 'block';
+    barCharts.style.display = 'block';
+    document.getElementById('toggleChartsBtn').textContent = '📊 Hide Charts';
+    renderCharts();
+  } else {
+    charts.style.display = 'none';
+    barCharts.style.display = 'none';
+    document.getElementById('toggleChartsBtn').textContent = '📊 Show Charts';
+  }
+}
+
+function exportToCSV() {
+  if (emailsData.length === 0) {
+    alert('No data to export!');
+    return;
+  }
+  
+  const headers = ['From', 'Subject', 'SPF', 'DKIM', 'DMARC', 'Risk Level'];
+  const csvContent = [
+    headers.join(','),
+    ...emailsData.map(email => 
+      [email.from, `"${email.subject}"`, email.spf, email.dkim, email.dmarc, email.risk_level].join(',')
+    )
+  ].join('\n');
+  
+  const blob = new Blob([csvContent], { type: 'text/csv' });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `phishguard-report-${new Date().toISOString().split('T')[0]}.csv`;
+  a.click();
+  window.URL.revokeObjectURL(url);
+}
+
+function clearAllData() {
+  if (confirm('Are you sure you want to clear all data?')) {
+    emailsData = [];
+    document.querySelector('#emailsTable tbody').innerHTML = '';
+    updateDashboard();
+    if (riskChart) riskChart.destroy();
+    if (riskBarChart) riskBarChart.destroy();
+  }
+}
+
+function viewEmailDetails(index) {
+  const email = emailsData[index];
+  const details = `
+    From: ${email.from}
+    Subject: ${email.subject}
+    Risk Level: ${email.risk_level}
+    SPF: ${email.spf} | DKIM: ${email.dkim} | DMARC: ${email.dmarc}
+    URLs Found: ${email.urls.length > 0 ? email.urls.join(', ') : 'None'}
+  `;
+  alert(details);
+}
+
+function deleteEmail(index) {
+  if (confirm('Delete this email from the dashboard?')) {
+    emailsData.splice(index, 1);
+    document.querySelector('#emailsTable tbody').innerHTML = '';
+    emailsData.forEach((email, idx) => addEmailToTable(idx, email));
+    updateDashboard();
+    renderCharts();
+  }
+}
+
+function showSampleData() {
+  const sampleEmails = [
+    {
+      from: 'security@paypal.com',
+      subject: 'Your account needs verification',
+      spf: 'pass',
+      dkim: 'pass',
+      dmarc: 'pass',
+      risk_level: 'Safe'
+    },
+    {
+      from: 'noreply@amazon-security.com',
+      subject: 'Unusual login detected',
+      spf: 'fail',
+      dkim: 'fail',
+      dmarc: 'fail',
+      risk_level: 'High'
+    },
+    {
+      from: 'support@microsoft.com',
+      subject: 'Password reset request',
+      spf: 'pass',
+      dkim: 'fail',
+      dmarc: 'pass',
+      risk_level: 'Suspicious'
+    }
+  ];
+  
+  emailsData = sampleEmails;
+  document.querySelector('#emailsTable tbody').innerHTML = '';
+  sampleEmails.forEach((email, idx) => addEmailToTable(idx, email));
+  updateDashboard();
+  renderCharts();
+  alert('Sample demo data loaded!');
 }
 
 // =================== Search & Filter ===================
@@ -162,6 +435,12 @@ document.getElementById('searchInput').oninput = document.getElementById('riskFi
       addEmailToTable(i,e);
     }
   });
+};
+
+// Initialize with sample data for demo
+window.onload = function() {
+  // Uncomment the line below if you want sample data to load automatically
+  // showSampleData();
 };
 </script>
 </body>
